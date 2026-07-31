@@ -1,7 +1,4 @@
-from contextlib import asynccontextmanager
-import json
 import os
-from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form
@@ -49,29 +46,7 @@ settings = get_settings()
 embedding_model = SimpleEmbeddingModel()
 vector_db = SQLiteVectorDB(embedding_model=embedding_model, db_path=settings.db_path)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    dataset_path = os.path.join(os.path.dirname(__file__), "data", "dataset.jsonl")
-    if os.path.exists(dataset_path):
-        with open(dataset_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                record = json.loads(line)
-                tenant_id = record.get("tenant_id", "tenant-alpha")
-                doc_id = record.get("id")
-                text = record.get("text", "")
-                
-                chunks = vector_db.chunk_document(text)
-                vector_db.add_document(
-                    tenant_id=tenant_id,
-                    document_id=doc_id,
-                    filename="dataset.jsonl",
-                    chunks=chunks,
-                )
-    yield
-
-app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version=settings.app_version)
 
 app.add_middleware(
     CORSMiddleware,
