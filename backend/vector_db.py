@@ -5,12 +5,19 @@ import sqlite3
 from pathlib import Path
 from threading import Lock
 
+# pyrefly: ignore [missing-import]
+import faiss
+# pyrefly: ignore [missing-import]
+import numpy as np
+
 from .chunk import chunk_text
-from .embedding import SimpleEmbeddingModel
+from .embedding import NvidiaEmbeddingModel
 
 
 class SQLiteVectorDB:
-    def __init__(self, embedding_model: SimpleEmbeddingModel, db_path: str) -> None:
+    """Vector database using SQLite for metadata and FAISS for similarity search."""
+
+    def __init__(self, embedding_model: NvidiaEmbeddingModel, db_path: str) -> None:
         self.embedding_model = embedding_model
         self.db_path = db_path
         self._lock = Lock()
@@ -60,6 +67,9 @@ class SQLiteVectorDB:
             connection.commit()
 
     def add_document(self, tenant_id: str, document_id: str, filename: str, chunks: list[str]) -> None:
+        if not chunks:
+            return
+        embeddings = self.embedding_model.embed_batch(chunks)
         with self._lock:
             with self._connect() as connection:
                 connection.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
@@ -76,7 +86,7 @@ class SQLiteVectorDB:
                     (document_id, tenant_id, filename, len(chunks), "indexed"),
                 )
 
-                for index, chunk_value in enumerate(chunks):
+                for index, (chunk_value, emb) in enumerate(zip(chunks, embeddings)):
                     connection.execute(
                         """
                         INSERT INTO chunks(chunk_id, document_id, tenant_id, filename, text, embedding)
@@ -88,7 +98,7 @@ class SQLiteVectorDB:
                             tenant_id,
                             filename,
                             chunk_value,
-                            json.dumps(self.embedding_model.embed(chunk_value)),
+                            json.dumps(emb),
                         ),
                     )
                 connection.commit()
@@ -99,15 +109,14 @@ class SQLiteVectorDB:
     def delete_document(self, tenant_id: str, document_id: str) -> bool:
         with self._lock:
             with self._connect() as connection:
-                # Check if document exists for this tenant
                 row = connection.execute(
                     "SELECT document_id FROM documents WHERE tenant_id = ? AND document_id = ?",
                     (tenant_id, document_id)
                 ).fetchone()
-                
+
                 if not row:
                     return False
-                    
+
                 connection.execute("DELETE FROM chunks WHERE tenant_id = ? AND document_id = ?", (tenant_id, document_id))
                 connection.execute("DELETE FROM documents WHERE tenant_id = ? AND document_id = ?", (tenant_id, document_id))
                 connection.commit()
@@ -132,8 +141,10 @@ class SQLiteVectorDB:
         return [dict(row) for row in rows]
 
     def search(self, tenant_id: str, query: str, top_k: int = 3) -> list[dict[str, object]]:
+        """Search using FAISS for fast, accurate vector similarity."""
         query_embedding = self.embedding_model.embed(query)
-        matches: list[dict[str, object]] = []
+        if not query_embedding:
+            return []
 
         with self._connect() as connection:
             rows = connection.execute(
@@ -145,39 +156,57 @@ class SQLiteVectorDB:
                 (tenant_id,),
             ).fetchall()
 
+        if not rows:
+            return []
+
+        # Build FAISS index from stored embeddings
+        embeddings_list = []
+        valid_rows = []
         for row in rows:
-            chunk_embedding = json.loads(row["embedding"])
-            score = self._cosine_similarity(query_embedding, chunk_embedding)
-            matches.append(
+            emb = json.loads(row["embedding"])
+            if emb:
+                embeddings_list.append(emb)
+                valid_rows.append(row)
+
+        if not embeddings_list:
+            return []
+
+        dim = len(embeddings_list[0])
+        db_matrix = np.array(embeddings_list, dtype=np.float32)
+        query_vec = np.array([query_embedding], dtype=np.float32)
+
+        # Normalize for cosine similarity
+        faiss.normalize_L2(db_matrix)
+        faiss.normalize_L2(query_vec)
+
+        # Build flat inner product index (= cosine similarity after L2 norm)
+        index = faiss.IndexFlatIP(dim)
+        index.add(db_matrix)
+
+        k = min(top_k, len(valid_rows))
+        scores, indices = index.search(query_vec, k)
+
+        results = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx < 0:
+                continue
+            row = valid_rows[idx]
+            results.append(
                 {
                     "chunk_id": row["chunk_id"],
                     "document_id": row["document_id"],
                     "tenant_id": row["tenant_id"],
                     "filename": row["filename"],
                     "text": row["text"],
-                    "score": round(score, 6),
+                    "score": round(float(score), 6),
                 }
             )
 
-        matches.sort(key=lambda item: item["score"], reverse=True)
-        return matches[:top_k]
-
-    @staticmethod
-    def _cosine_similarity(left: list[float], right: list[float]) -> float:
-        if not left or not right:
-            return 0.0
-
-        dot_product = sum(a * b for a, b in zip(left, right))
-        left_norm = sum(value * value for value in left) ** 0.5
-        right_norm = sum(value * value for value in right) ** 0.5
-
-        if left_norm == 0 or right_norm == 0:
-            return 0.0
-
-        return dot_product / (left_norm * right_norm)
+        return results
 
     def stats(self) -> dict[str, int]:
         with self._connect() as connection:
             docs = connection.execute("SELECT COUNT(*) AS total FROM documents").fetchone()["total"]
             chunks = connection.execute("SELECT COUNT(*) AS total FROM chunks").fetchone()["total"]
         return {"documents": int(docs), "chunks": int(chunks)}
+

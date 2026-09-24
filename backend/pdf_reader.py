@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 import PyPDF2
 
 def extract_text_from_pdf(file_path: str) -> str:

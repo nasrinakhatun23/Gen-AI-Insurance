@@ -5,7 +5,7 @@ from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from .embedding import SimpleEmbeddingModel
+from .embedding import NvidiaEmbeddingModel
 from .llm import generate_answer
 from .settings import get_settings
 from .vector_db import SQLiteVectorDB
@@ -43,7 +43,7 @@ class ChatResponse(BaseModel):
 
 settings = get_settings()
 
-embedding_model = SimpleEmbeddingModel()
+embedding_model = NvidiaEmbeddingModel(api_key=settings.nvidia_api_key)
 vector_db = SQLiteVectorDB(embedding_model=embedding_model, db_path=settings.db_path)
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
@@ -92,12 +92,15 @@ async def upload_document(
     document_id = str(uuid4())
     chunks = vector_db.chunk_document(text)
     
-    vector_db.add_document(
-        tenant_id=resolved_tenant,
-        document_id=document_id,
-        filename=file.filename,
-        chunks=chunks,
-    )
+    try:
+        vector_db.add_document(
+            tenant_id=resolved_tenant,
+            document_id=document_id,
+            filename=file.filename,
+            chunks=chunks,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate embeddings or index document: {str(e)}")
 
     return UploadResult(
         document_id=document_id,
@@ -126,7 +129,7 @@ def delete_document(
 def chat(request: ChatRequest, x_tenant_id: str | None = Header(default=None)) -> ChatResponse:
     resolved_tenant = resolve_tenant(request.tenant_id, x_tenant_id)
     matches = vector_db.search(tenant_id=resolved_tenant, query=request.query, top_k=request.top_k)
-    answer = generate_answer(query=request.query, tenant_id=resolved_tenant, matches=matches)
+    answer = generate_answer(query=request.query, tenant_id=resolved_tenant, matches=matches, api_key=settings.nvidia_api_key)
 
     sources = [
         SourceChunk(

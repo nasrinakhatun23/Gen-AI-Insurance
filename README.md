@@ -1,16 +1,78 @@
-# React + Vite
+# RAG Chatbot
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This project implements a Retrieval-Augmented Generation (RAG) chatbot using FastAPI and React.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Document ingestion and preprocessing (PDF)
+- Text chunking and metadata association
+- Embedding generation using NVIDIA NIM embeddings
+- Vector storage with FAISS and SQLite
+- Retrieval and similarity search
+- Answer generation using NVIDIA LLM
+- React UI for easy interaction with the chatbot
 
-## React Compiler
+## Data
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- The application supports uploading PDF policy documents directly through the web interface.
+- Uploaded documents are automatically parsed, chunked, and indexed into the vector database.
 
-## Expanding the ESLint configuration
+## Installation
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+1. Clone the repository:
+
+```bash
+git clone <repo-url>
+cd insurance-chatbot
+```
+
+2. Create a virtual environment:
+
+```bash
+python -m venv venv
+```
+
+3. Activate the virtual environment:
+
+- **Windows (PowerShell)**: `.\venv\Scripts\Activate.ps1`
+- **macOS/Linux**: `source venv/bin/activate`
+
+4. Install dependencies:
+
+```bash
+pip install -r backend/requirements.txt
+npm install
+```
+
+5. Set up NVIDIA API key:
+
+Add your API key to `backend/.env`:
+```env
+NVIDIA_API_KEY=your_nvidia_api_key_here
+```
+
+## NVIDIA NIM
+
+The project uses the `openai` Python SDK with NVIDIA NIM API to generate embeddings and synthesize answers from retrieved context. You must provide a valid NVIDIA API key for generation and final answer synthesis.
+
+## Usage
+
+Start the backend and frontend servers:
+
+1. Run the backend server:
+```bash
+python -m uvicorn backend.app:app --reload
+```
+
+2. Run the frontend application:
+```bash
+npm run dev
+```
+
+Open `http://localhost:5173` in your browser to interact with the chatbot.
+
+## Requirements
+
+- Python 3.10+
+- Node.js 18+
+- NVIDIA API key
